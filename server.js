@@ -47,9 +47,10 @@ app.get('/api/test', (req, res) => {
   });
 });
 
-app.post('/api/compose', upload.none(), (req, res) => {
+app.post('/api/compose', (req, res) => {
   console.log('[API] Compose endpoint called');
-  console.log('[API] Request body:', req.body);
+  console.log('[API] Request body keys:', Object.keys(req.body));
+  console.log('[API] Request content-type:', req.get('Content-Type'));
   
   try {
     const { images, mode = 'tryOn', highResolution = true, faceBlur = false } = req.body;
