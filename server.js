@@ -13,7 +13,59 @@ app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 // Multer for handling multipart/form-data
 const upload = multer();
 
-// Create AI-generated composed images using Google Gemini
+// Doğru Gemini T2I (Text-to-Image) çağrısı
+async function callGeminiT2I({ apiKey, prompt, imageBase64List }) {
+  const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-image-preview:generateContent?key=${apiKey}`;
+
+  const parts = [{ text: prompt }];
+  for (const b64 of imageBase64List) {
+    // Base64 temizle (data: prefix varsa)
+    const cleanB64 = b64.replace(/^data:\w+\/\w+;base64,/, '');
+    parts.push({
+      inline_data: {  // snake_case kullan
+        mime_type: "image/jpeg",  // snake_case kullan
+        data: cleanB64  // temiz base64, prefix yok
+      }
+    });
+  }
+
+  const body = {
+    contents: [{ parts }],
+    generationConfig: {
+      temperature: 0.4,
+      topK: 32,
+      topP: 1,
+      maxOutputTokens: 4096
+    }
+  };
+
+  console.log('🚀 Calling Gemini T2I with correct model...');
+  
+  const resp = await fetch(endpoint, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body)
+  });
+
+  if (!resp.ok) {
+    const txt = await resp.text();
+    throw new Error(`Gemini T2I HTTP ${resp.status}: ${txt}`);
+  }
+
+  const data = await resp.json();
+  const partsOut = data?.candidates?.[0]?.content?.parts ?? [];
+  
+  for (const p of partsOut) {
+    if (p.inline_data?.data) {
+      console.log('✅ Got real generated image from Gemini T2I!');
+      return p.inline_data.data; // base64 (saf, prefixsiz)
+    }
+  }
+  
+  throw new Error("No image inline_data in response");
+}
+
+// Create AI-generated composed images using correct Gemini T2I
 async function createComposedImage(images, mode = 'tryOn') {
   const apiKey = process.env.GEMINI_API_KEY;
   
@@ -23,110 +75,33 @@ async function createComposedImage(images, mode = 'tryOn') {
   }
   
   try {
-         // Create mode-specific prompt for realistic image generation
-     const prompts = {
-       tryOn: "Create a photorealistic image of the person wearing the clothing item. The person should be naturally dressed in the provided garment with perfect fit, realistic fabric draping, proper lighting, and professional fashion photography quality. Maintain the person's pose, facial features, and background while seamlessly integrating the clothing. The result should look like a real photograph of the person actually wearing the clothes.",
-       bgSwap: "Generate a photorealistic image where the person is placed in the new background environment while keeping their appearance and clothing exactly the same. Match the lighting, shadows, and atmosphere to make it look naturally integrated.",
-       flatLay: "Create a professional flat lay photograph of the clothing items arranged aesthetically on a clean surface with proper shadows and studio lighting.",
-       flatLayBg: "Generate a realistic flat lay composition with the clothing items beautifully arranged on the provided background surface.",
-       garmentInScene: "Create a photorealistic scene where the clothing items are naturally placed in the environment with realistic lighting and shadows.",
-       collage: "Generate an artistic but realistic collage combining the provided images with professional composition and lighting."
-     };
+    // Mode-specific prompts for realistic T2I generation
+    const promptMap = {
+      tryOn: "Create a photorealistic try-on result of the person wearing the garment. Keep identity intact, realistic lighting and fabric draping. Professional fashion photography quality.",
+      bgSwap: "Replace background realistically while keeping subject sharp, with consistent shadows and color temperature.",
+      flatLay: "Generate a professional flat lay product photo with studio-like lighting and soft shadows.",
+      flatLayBg: "Create a realistic flat lay composition with the clothing items beautifully arranged on the provided background surface.",
+      garmentInScene: "Create a photorealistic scene where the clothing items are naturally placed in the environment with realistic lighting and shadows.",
+      collage: "Compose an aesthetic collage that still looks realistic and coherent with professional lighting."
+    };
     
-    const prompt = prompts[mode] || prompts.tryOn;
+    const prompt = promptMap[mode] || promptMap.tryOn;
     
-    // Prepare images for Gemini API
-    const imageParts = images.map(imageData => ({
-      inlineData: {
-        mimeType: "image/jpeg",
-        data: imageData
-      }
-    }));
+    // Call correct Gemini T2I model
+    const resultB64 = await callGeminiT2I({
+      apiKey,
+      prompt,
+      imageBase64List: images
+    });
     
-         // Try Gemini Pro Vision for image generation first
-     const imageGenResponse = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-pro-vision:generateContent?key=${apiKey}`, {
-       method: 'POST',
-       headers: {
-         'Content-Type': 'application/json',
-       },
-       body: JSON.stringify({
-         contents: [{
-           parts: [
-             { text: `Generate a realistic image: ${prompt}` },
-             ...imageParts
-           ]
-         }],
-         generationConfig: {
-           temperature: 0.4,
-           topK: 32,
-           topP: 1,
-           maxOutputTokens: 4096,
-         }
-       })
-     });
-     
-     // Check if image generation worked
-     if (imageGenResponse.ok) {
-       const imageGenData = await imageGenResponse.json();
-       
-       if (imageGenData.candidates && imageGenData.candidates[0] && imageGenData.candidates[0].content && imageGenData.candidates[0].content.parts) {
-         for (const part of imageGenData.candidates[0].content.parts) {
-           if (part.inlineData && part.inlineData.data) {
-             console.log('✅ Generated realistic image from Gemini Pro Vision!');
-             return part.inlineData.data;
-           }
-         }
-       }
-     }
-     
-     // Fallback: Call regular Gemini for analysis
-     const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${apiKey}`, {
-       method: 'POST',
-       headers: {
-         'Content-Type': 'application/json',
-       },
-       body: JSON.stringify({
-         contents: [{
-           parts: [
-             { text: `Analyze these images and provide a detailed description of how they would look when combined in a ${mode} style. Describe the final result as if you're looking at the completed composition. Be specific about colors, fit, style, and overall appearance.` },
-             ...imageParts
-           ]
-         }],
-         generationConfig: {
-           temperature: 0.7,
-           topK: 40,
-           topP: 0.8,
-           maxOutputTokens: 512,
-         }
-       })
-     });
+    return resultB64;
     
-    if (!response.ok) {
-      console.log(`❌ Gemini API error: ${response.status}`);
-      return createFallbackImage(mode);
+  } catch (error) {
+    console.error('❌ Gemini T2I error:', error.message);
+    console.log('🔄 Falling back to composite image...');
+    return await createCompositeImage(images, mode, 'AI-powered fashion composition');
     }
-    
-    const data = await response.json();
-    
-    // Check if Gemini returned an image
-    if (data.candidates && data.candidates[0] && data.candidates[0].content && data.candidates[0].content.parts) {
-      for (const part of data.candidates[0].content.parts) {
-        if (part.inlineData && part.inlineData.data) {
-          console.log('✅ Generated image from Gemini API');
-          return part.inlineData.data;
-        }
-      }
-    }
-    
-         console.log('ℹ️ No image in Gemini response, creating composite image');
-     const aiDescription = data.candidates?.[0]?.content?.parts?.[0]?.text;
-     return await createCompositeImage(images, mode, aiDescription);
-    
-     } catch (error) {
-     console.error('❌ Gemini API error:', error.message);
-     return await createCompositeImage(images, mode, 'AI-powered fashion composition');
-   }
- }
+}
  
  // Create real composite image using Canvas
  async function createCompositeImage(images, mode, aiDescription) {
