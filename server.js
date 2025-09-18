@@ -23,15 +23,15 @@ async function createComposedImage(images, mode = 'tryOn') {
   }
   
   try {
-    // Create mode-specific prompt
-    const prompts = {
-      tryOn: "Create a realistic fashion photo showing a person wearing the provided clothing items. The person should appear naturally dressed in the clothes with proper fit, lighting, and professional fashion photography style. Make it look like a real try-on photo.",
-      bgSwap: "Replace the background of the person with a new stylish background while keeping the person and their clothes exactly the same. Ensure proper lighting and shadow matching for a natural look.",
-      flatLay: "Create a stylish flat lay arrangement of the clothing items on a clean, neutral background. Arrange them in an aesthetically pleasing, Instagram-worthy style with proper shadows and lighting.",
-      flatLayBg: "Create a flat lay composition of the clothing items on the provided background. Arrange the clothes in a visually appealing way that complements the background setting.",
-      garmentInScene: "Naturally integrate the clothing items into the scene. The clothes should appear as if they belong in that environment with realistic lighting, perspective, and scale.",
-      collage: "Create an artistic fashion collage combining all the provided images. Use creative layouts, stylish overlays, and modern design elements for an engaging visual composition."
-    };
+         // Create mode-specific prompt for realistic image generation
+     const prompts = {
+       tryOn: "Create a photorealistic image of the person wearing the clothing item. The person should be naturally dressed in the provided garment with perfect fit, realistic fabric draping, proper lighting, and professional fashion photography quality. Maintain the person's pose, facial features, and background while seamlessly integrating the clothing. The result should look like a real photograph of the person actually wearing the clothes.",
+       bgSwap: "Generate a photorealistic image where the person is placed in the new background environment while keeping their appearance and clothing exactly the same. Match the lighting, shadows, and atmosphere to make it look naturally integrated.",
+       flatLay: "Create a professional flat lay photograph of the clothing items arranged aesthetically on a clean surface with proper shadows and studio lighting.",
+       flatLayBg: "Generate a realistic flat lay composition with the clothing items beautifully arranged on the provided background surface.",
+       garmentInScene: "Create a photorealistic scene where the clothing items are naturally placed in the environment with realistic lighting and shadows.",
+       collage: "Generate an artistic but realistic collage combining the provided images with professional composition and lighting."
+     };
     
     const prompt = prompts[mode] || prompts.tryOn;
     
@@ -43,7 +43,43 @@ async function createComposedImage(images, mode = 'tryOn') {
       }
     }));
     
-         // Call Gemini API for image analysis and description
+         // Try Gemini Pro Vision for image generation first
+     const imageGenResponse = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-pro-vision:generateContent?key=${apiKey}`, {
+       method: 'POST',
+       headers: {
+         'Content-Type': 'application/json',
+       },
+       body: JSON.stringify({
+         contents: [{
+           parts: [
+             { text: `Generate a realistic image: ${prompt}` },
+             ...imageParts
+           ]
+         }],
+         generationConfig: {
+           temperature: 0.4,
+           topK: 32,
+           topP: 1,
+           maxOutputTokens: 4096,
+         }
+       })
+     });
+     
+     // Check if image generation worked
+     if (imageGenResponse.ok) {
+       const imageGenData = await imageGenResponse.json();
+       
+       if (imageGenData.candidates && imageGenData.candidates[0] && imageGenData.candidates[0].content && imageGenData.candidates[0].content.parts) {
+         for (const part of imageGenData.candidates[0].content.parts) {
+           if (part.inlineData && part.inlineData.data) {
+             console.log('✅ Generated realistic image from Gemini Pro Vision!');
+             return part.inlineData.data;
+           }
+         }
+       }
+     }
+     
+     // Fallback: Call regular Gemini for analysis
      const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${apiKey}`, {
        method: 'POST',
        headers: {
